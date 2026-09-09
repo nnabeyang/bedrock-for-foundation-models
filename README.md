@@ -11,6 +11,9 @@ It provides `BedrockLanguageModel`, a `LanguageModel` implementation backed by t
 - Supports tool calling
 - Supports reasoning content, carrying the signature over to the next turn
 - Retries `503` responses with exponential backoff (up to 3 retries)
+- The Converse request and response are modeled as `Codable` Swift types, so
+  content blocks Bedrock adds later round-trip untouched rather than failing the
+  response
 - No external dependencies — only `Foundation` and `CommonCrypto`
 
 ## Requirements
@@ -83,6 +86,17 @@ let auth = BedrockAuth.sigV4(
 Tool definitions are translated into Bedrock's `toolConfig`. JSON Schema keys that Bedrock rejects (`additionalProperties`, `title`, `x-order`, and others) are stripped before the request is sent.
 
 ## Development
+
+The package is built from two targets:
+
+- `BedrockRuntimeAPI` — the Converse API: `Codable` wire types, the HTTP client
+  and SigV4 signing. It doesn't import FoundationModels, so it carries no
+  availability constraint and its tests run anywhere.
+- `BedrockForFoundationModels` — the bridge: `LanguageModel` conformance and the
+  translation between `Transcript` and the Converse payload.
+
+Only `BedrockForFoundationModels` is exported as a product, so nothing changes
+for callers: `import BedrockForFoundationModels` remains the whole API surface.
 
 ```sh
 swift build

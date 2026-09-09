@@ -1,0 +1,136 @@
+import Foundation
+import FoundationModels
+import Testing
+
+@testable import BedrockForFoundationModels
+@testable import BedrockRuntimeAPI
+
+// `ConverseRequestBuilder` is gated `@available(anyAppleOS 27, *)`; the tests
+// carry the same gate. swift-testing's `@Test` / `@Suite` macros expand fine
+// under it on this toolchain.
+
+@available(anyAppleOS 27, *)
+private func buildRequest(_ entries: [Transcript.Entry]) -> ConverseRequest {
+  ConverseRequestBuilder.build(
+    from: LanguageModelExecutorGenerationRequest(
+      id: UUID(),
+      transcript: Transcript(entries: entries),
+      enabledTools: [],
+      schema: nil,
+      generationOptions: GenerationOptions(toolCallingMode: nil),
+      contextOptions: ContextOptions(),
+      metadata: [:]
+    )
+  )
+}
+
+@available(anyAppleOS 27, *)
+private func textSegments(_ text: String) -> [Transcript.Segment] {
+  [.text(Transcript.TextSegment(content: text))]
+}
+
+@Suite("ConverseRequestBuilder tool round-trip")
+struct ConverseRequestBuilderToolTests {
+  @available(anyAppleOS 27, *)
+  @Test("replays a tool call with its arguments intact, not collapsed to {}")
+  func replaysToolCallArguments() throws {
+    let args = try GeneratedContent(json: #"{"path":"./README.md"}"#)
+    let entries: [Transcript.Entry] = [
+      .toolCalls(
+        Transcript.ToolCalls([
+          Transcript.ToolCall(id: "tu_1", toolName: "read_file", arguments: args)
+        ])),
+      .toolOutput(
+        Transcript.ToolOutput(
+          id: "tu_1", toolName: "read_file", segments: textSegments("# eich\n\nA REPL."))),
+    ]
+
+    let body = buildRequest(entries)
+
+    #expect(body.messages.count == 2)
+    #expect(body.messages[0].role == .assistant)
+    guard case .toolUse(let toolUse) = body.messages[0].content.first else {
+      Issue.record("expected a toolUse block, got \(body.messages[0].content)")
+      return
+    }
+    #expect(toolUse.toolUseId == "tu_1")
+    #expect(toolUse.name == "read_file")
+    #expect(toolUse.input == .object(["path": .string("./README.md")]))
+
+    #expect(body.messages[1].role == .user)
+    guard case .toolResult(let result) = body.messages[1].content.first else {
+      Issue.record("expected a toolResult block, got \(body.messages[1].content)")
+      return
+    }
+    #expect(result.toolUseId == "tu_1")
+    #expect(result.content == [.text("# eich\n\nA REPL.")])
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("substitutes (no output) for an empty tool result")
+  func emptyToolOutput() {
+    let entries: [Transcript.Entry] = [
+      .toolOutput(Transcript.ToolOutput(id: "tu_1", toolName: "x", segments: textSegments("")))
+    ]
+    let body = buildRequest(entries)
+    guard case .toolResult(let result) = body.messages.first?.content.first else {
+      Issue.record("expected a toolResult block")
+      return
+    }
+    #expect(result.content == [.text("(no output)")])
+  }
+}
+
+@Suite("ConverseRequestBuilder reasoning replay")
+struct ConverseRequestBuilderReasoningTests {
+  @available(anyAppleOS 27, *)
+  @Test("drops a reasoning entry that carries no signature")
+  func dropsUnsignedReasoning() {
+    let entries: [Transcript.Entry] = [
+      .reasoning(Transcript.Reasoning(segments: textSegments("half a thought"), signature: nil)),
+      .response(Transcript.Response(assetIDs: [], segments: textSegments("answer"))),
+    ]
+    let body = buildRequest(entries)
+    // Only the response survives.
+    #expect(body.messages.count == 1)
+    #expect(body.messages[0].content == [.text("answer")])
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("replays a signed reasoning entry as reasoningText with the signature")
+  func replaysSignedReasoning() {
+    let sig = Data([1, 2, 3])
+    let entries: [Transcript.Entry] = [
+      .reasoning(Transcript.Reasoning(segments: textSegments("a thought"), signature: sig))
+    ]
+    let body = buildRequest(entries)
+    guard case .reasoningContent(.reasoningText(let reasoning)) = body.messages.first?.content.first
+    else {
+      Issue.record("expected a reasoningText block, got \(String(describing: body.messages.first))")
+      return
+    }
+    #expect(reasoning.text == "a thought")
+    #expect(reasoning.signature == sig.base64EncodedString())
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("replays a redacted-flagged reasoning entry as redactedContent")
+  func replaysRedactedReasoning() {
+    let sig = Data([9, 9, 9])
+    let entries: [Transcript.Entry] = [
+      .reasoning(
+        Transcript.Reasoning(
+          metadata: [redactedReasoningMetadataKey: true],
+          segments: [],
+          signature: sig
+        ))
+    ]
+    let body = buildRequest(entries)
+    guard case .reasoningContent(.redactedContent(let data)) = body.messages.first?.content.first
+    else {
+      Issue.record("expected a redactedContent block, got \(String(describing: body.messages.first))")
+      return
+    }
+    #expect(data == sig)
+  }
+}
