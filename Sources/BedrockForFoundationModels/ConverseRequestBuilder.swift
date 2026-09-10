@@ -99,15 +99,45 @@ enum ConverseRequestBuilder {
       body.system = [.text(systemParts.joined(separator: "\n\n"))]
     }
 
-    let tools = request.enabledToolDefinitions.map(tool(from:))
-    if !tools.isEmpty {
-      body.toolConfig = ToolConfiguration(tools: tools)
-    }
+    body.toolConfig = toolConfiguration(
+      for: options.toolCallingMode,
+      tools: request.enabledToolDefinitions.map(tool(from:)),
+      messages: body.messages
+    )
 
     return body
   }
 
   // MARK: - Private helpers
+
+  /// The tools this turn may use, and how freely, or `nil` when none go out.
+  ///
+  /// Converse has no "never call a tool" choice, so a caller who forbids tool
+  /// calling is served by sending no tools at all. That is not always available:
+  /// once the transcript contains a tool round-trip, the request is rejected
+  /// without a `toolConfig` describing the tools it mentions. The tools then
+  /// stay and the choice is left at the model's default, which is the closest
+  /// the API allows.
+  private static func toolConfiguration(
+    for mode: GenerationOptions.ToolCallingMode?,
+    tools: [ConverseTool],
+    messages: [ConverseMessage]
+  ) -> ToolConfiguration? {
+    guard !tools.isEmpty else { return nil }
+
+    switch mode?.kind {
+    case .allowed:
+      return ToolConfiguration(tools: tools, toolChoice: .auto)
+    case .required:
+      return ToolConfiguration(tools: tools, toolChoice: .any)
+    case .disallowed:
+      return messages.containsToolBlocks ? ToolConfiguration(tools: tools) : nil
+    case .none:
+      return ToolConfiguration(tools: tools)
+    @unknown default:
+      return ToolConfiguration(tools: tools)
+    }
+  }
 
   /// The base inference parameters, or `nil` when the caller named none.
   ///

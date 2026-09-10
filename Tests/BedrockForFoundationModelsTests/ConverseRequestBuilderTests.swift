@@ -12,18 +12,35 @@ import Testing
 @available(anyAppleOS 27, *)
 private func buildRequest(
   _ entries: [Transcript.Entry],
-  options: GenerationOptions = GenerationOptions(toolCallingMode: nil)
+  options: GenerationOptions = GenerationOptions(toolCallingMode: nil),
+  tools: [Transcript.ToolDefinition] = []
 ) -> ConverseRequest {
   ConverseRequestBuilder.build(
     from: LanguageModelExecutorGenerationRequest(
       id: UUID(),
       transcript: Transcript(entries: entries),
-      enabledTools: [],
+      enabledTools: tools,
       schema: nil,
       generationOptions: options,
       contextOptions: ContextOptions(),
       metadata: [:]
     )
+  )
+}
+
+@available(anyAppleOS 27, *)
+@Generable
+private struct WeatherInput {
+  @Guide(description: "The city to look up.")
+  var city: String
+}
+
+@available(anyAppleOS 27, *)
+private func weatherTool() -> Transcript.ToolDefinition {
+  Transcript.ToolDefinition(
+    name: "get_weather",
+    description: "Looks up the weather in a city.",
+    parameters: WeatherInput.generationSchema
   )
 }
 
@@ -214,5 +231,86 @@ struct ConverseRequestBuilderInferenceTests {
 
     #expect(body.inferenceConfig == nil)
     #expect(body.additionalModelRequestFields == ["top_k": 40])
+  }
+}
+
+@Suite("ConverseRequestBuilder tool choice")
+struct ConverseRequestBuilderToolChoiceTests {
+  @available(anyAppleOS 27, *)
+  private static func prompt() -> [Transcript.Entry] {
+    [.prompt(Transcript.Prompt(segments: textSegments("what is the weather?")))]
+  }
+
+  @available(anyAppleOS 27, *)
+  private static func promptWithToolRoundTrip() -> [Transcript.Entry] {
+    prompt() + [
+      .toolCalls(
+        Transcript.ToolCalls([
+          Transcript.ToolCall(
+            id: "tu_1", toolName: "get_weather", arguments: GeneratedContent(kind: .null))
+        ])),
+      .toolOutput(
+        Transcript.ToolOutput(id: "tu_1", toolName: "get_weather", segments: textSegments("sunny"))),
+    ]
+  }
+
+  @available(anyAppleOS 27, *)
+  private static func options(
+    _ mode: GenerationOptions.ToolCallingMode?
+  ) -> GenerationOptions {
+    GenerationOptions(
+      samplingMode: nil, temperature: nil, maximumResponseTokens: nil, toolCallingMode: mode)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("sends no toolConfig when there are no tools")
+  func omitsToolConfigWithoutTools() {
+    #expect(buildRequest(Self.prompt()).toolConfig == nil)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("leaves the choice to the model when the caller named no mode")
+  func omitsToolChoiceWithoutMode() {
+    let body = buildRequest(Self.prompt(), options: Self.options(nil), tools: [weatherTool()])
+
+    #expect(body.toolConfig?.tools.count == 1)
+    #expect(body.toolConfig?.toolChoice == nil)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("writes allowed as auto")
+  func sendsAllowedAsAuto() {
+    let body = buildRequest(Self.prompt(), options: Self.options(.allowed), tools: [weatherTool()])
+
+    #expect(body.toolConfig?.toolChoice == .auto)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("writes required as any")
+  func sendsRequiredAsAny() {
+    let body = buildRequest(Self.prompt(), options: Self.options(.required), tools: [weatherTool()])
+
+    #expect(body.toolConfig?.toolChoice == .any)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("expresses disallowed by sending no tools at all")
+  func sendsNoToolsWhenDisallowed() {
+    let body = buildRequest(
+      Self.prompt(), options: Self.options(.disallowed), tools: [weatherTool()])
+
+    #expect(body.toolConfig == nil)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("keeps the tools when disallowed but the history already used one")
+  func keepsToolsWhenHistoryMentionsThem() {
+    let body = buildRequest(
+      Self.promptWithToolRoundTrip(), options: Self.options(.disallowed), tools: [weatherTool()])
+
+    // Converse rejects a history that mentions a tool the request doesn't
+    // describe, so the tools stay and the choice falls back to the default.
+    #expect(body.toolConfig?.tools.count == 1)
+    #expect(body.toolConfig?.toolChoice == nil)
   }
 }
