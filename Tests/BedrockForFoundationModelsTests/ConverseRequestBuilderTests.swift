@@ -10,14 +10,17 @@ import Testing
 // under it on this toolchain.
 
 @available(anyAppleOS 27, *)
-private func buildRequest(_ entries: [Transcript.Entry]) -> ConverseRequest {
+private func buildRequest(
+  _ entries: [Transcript.Entry],
+  options: GenerationOptions = GenerationOptions(toolCallingMode: nil)
+) -> ConverseRequest {
   ConverseRequestBuilder.build(
     from: LanguageModelExecutorGenerationRequest(
       id: UUID(),
       transcript: Transcript(entries: entries),
       enabledTools: [],
       schema: nil,
-      generationOptions: GenerationOptions(toolCallingMode: nil),
+      generationOptions: options,
       contextOptions: ContextOptions(),
       metadata: [:]
     )
@@ -132,5 +135,84 @@ struct ConverseRequestBuilderReasoningTests {
       return
     }
     #expect(data == sig)
+  }
+}
+
+@Suite("ConverseRequestBuilder inference parameters")
+struct ConverseRequestBuilderInferenceTests {
+  @available(anyAppleOS 27, *)
+  private static func prompt() -> [Transcript.Entry] {
+    [.prompt(Transcript.Prompt(segments: textSegments("hi")))]
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("sends no inferenceConfig when the caller named no parameters")
+  func omitsEmptyInferenceConfig() {
+    let body = buildRequest(Self.prompt())
+
+    #expect(body.inferenceConfig == nil)
+    #expect(body.additionalModelRequestFields == nil)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("carries the response token limit")
+  func sendsMaximumResponseTokens() {
+    let body = buildRequest(
+      Self.prompt(),
+      options: GenerationOptions(
+        samplingMode: nil, temperature: nil, maximumResponseTokens: 512, toolCallingMode: nil))
+
+    #expect(body.inferenceConfig == InferenceConfiguration(maxTokens: 512))
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("expresses greedy sampling as temperature 0")
+  func sendsGreedyAsZeroTemperature() {
+    let body = buildRequest(
+      Self.prompt(),
+      options: GenerationOptions(
+        samplingMode: .greedy, temperature: nil, maximumResponseTokens: nil, toolCallingMode: nil))
+
+    #expect(body.inferenceConfig == InferenceConfiguration(temperature: 0))
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("lets an explicit temperature override the one greedy implies")
+  func explicitTemperatureWinsOverGreedy() {
+    let body = buildRequest(
+      Self.prompt(),
+      options: GenerationOptions(
+        samplingMode: .greedy, temperature: 0.7, maximumResponseTokens: nil, toolCallingMode: nil))
+
+    #expect(body.inferenceConfig == InferenceConfiguration(temperature: 0.7))
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("maps a probability threshold onto topP")
+  func sendsProbabilityThresholdAsTopP() {
+    let body = buildRequest(
+      Self.prompt(),
+      options: GenerationOptions(
+        samplingMode: .random(probabilityThreshold: 0.9),
+        temperature: nil,
+        maximumResponseTokens: nil,
+        toolCallingMode: nil))
+
+    #expect(body.inferenceConfig == InferenceConfiguration(topP: 0.9))
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("passes top-k through the model-specific fields, not inferenceConfig")
+  func sendsTopKThroughAdditionalFields() {
+    let body = buildRequest(
+      Self.prompt(),
+      options: GenerationOptions(
+        samplingMode: .random(top: 40),
+        temperature: nil,
+        maximumResponseTokens: nil,
+        toolCallingMode: nil))
+
+    #expect(body.inferenceConfig == nil)
+    #expect(body.additionalModelRequestFields == ["top_k": 40])
   }
 }

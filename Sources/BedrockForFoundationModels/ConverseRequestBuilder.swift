@@ -85,11 +85,14 @@ enum ConverseRequestBuilder {
 
     var body = ConverseRequest(messages: messages.mergingConsecutiveSameRole())
 
-    // Only send inferenceConfig when the framework asked for a limit; otherwise
-    // let Bedrock apply its own default, since overshooting maxTokens makes it
-    // answer 503.
-    if let maxTokens = request.generationOptions.maximumResponseTokens {
-      body.inferenceConfig = InferenceConfiguration(maxTokens: maxTokens)
+    let options = request.generationOptions
+    body.inferenceConfig = inferenceConfiguration(for: options)
+    if case .randomTopK(let topK, _)? = options.samplingMode?.kind {
+      // top-k is not one of Converse's base parameters, so it rides in the
+      // model-specific passthrough. The spelling is Anthropic's; a model family
+      // that doesn't know the key answers 400, which tells the caller their
+      // sampling mode didn't apply instead of quietly ignoring it.
+      body.additionalModelRequestFields = ["top_k": .number(Double(topK))]
     }
 
     if !systemParts.isEmpty {
@@ -105,6 +108,42 @@ enum ConverseRequestBuilder {
   }
 
   // MARK: - Private helpers
+
+  /// The base inference parameters, or `nil` when the caller named none.
+  ///
+  /// `maxTokens` only goes out when the framework asked for a limit: left
+  /// alone, Bedrock applies its own default, and overshooting it makes the
+  /// service answer 503.
+  ///
+  /// The seed a sampling mode may carry is dropped. Converse has no parameter
+  /// for it, and there is nowhere to put it that would make generation
+  /// reproducible.
+  private static func inferenceConfiguration(
+    for options: GenerationOptions
+  ) -> InferenceConfiguration? {
+    var configuration = InferenceConfiguration(maxTokens: options.maximumResponseTokens)
+
+    switch options.samplingMode?.kind {
+    case .greedy:
+      // Converse has no "greedy" switch; temperature 0 is how the same
+      // intent — take the most likely token — is expressed on the wire.
+      configuration.temperature = 0
+    case .randomProbabilityThreshold(let threshold, _):
+      configuration.topP = threshold
+    case .randomTopK, .none:
+      break
+    @unknown default:
+      break
+    }
+
+    // An explicit temperature is the more specific instruction, so it overrides
+    // the one implied by a sampling mode.
+    if let temperature = options.temperature {
+      configuration.temperature = temperature
+    }
+
+    return configuration == InferenceConfiguration() ? nil : configuration
+  }
 
   private static func text(of segments: [Transcript.Segment]) -> String {
     segments.compactMap { segment -> String? in
