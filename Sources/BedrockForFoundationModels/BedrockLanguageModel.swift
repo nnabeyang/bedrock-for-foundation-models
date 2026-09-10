@@ -26,7 +26,7 @@ public struct BedrockLanguageModel: LanguageModel, Sendable {
   }
 
   public var capabilities: LanguageModelCapabilities {
-    LanguageModelCapabilities([.toolCalling])
+    LanguageModelCapabilities([.toolCalling, .guidedGeneration])
   }
 
   public var executorConfiguration: BedrockExecutor.Configuration {

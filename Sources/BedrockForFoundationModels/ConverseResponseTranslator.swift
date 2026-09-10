@@ -7,6 +7,7 @@ import FoundationModels
 enum ConverseResponseTranslator {
   static func send(
     _ response: ConverseResponse,
+    structuredOutputToolName: String? = nil,
     into channel: LanguageModelExecutorGenerationChannel
   ) async throws {
     guard let message = response.output.message else {
@@ -27,17 +28,21 @@ enum ConverseResponseTranslator {
             action: .appendText(text, tokenCount: 1)
           ))
 
+      case .toolUse(let toolUse) where toolUse.name == structuredOutputToolName:
+        // The structured answer arrives as this tool's arguments. The framework
+        // parses the response text against the schema it asked for, and
+        // `Response.Action` offers no factory for a structure segment, so the
+        // JSON goes through as text.
+        await channel.send(
+          .response(
+            entryID: responseEntryID,
+            action: .appendText(arguments(of: toolUse), tokenCount: 1)
+          ))
+
       case .toolUse(let toolUse):
         // Open the tool call with an empty argument chunk, then append the
-        // full JSON. A non-object `input` (Bedrock should never send one for a
-        // schema-shaped tool) collapses to `{}`, mirroring the request side's
-        // `toolInput(_:)`, so the round-trip stays consistent.
-        let argumentsJSON: String
-        if case .object = toolUse.input {
-          argumentsJSON = toolUse.input.jsonText
-        } else {
-          argumentsJSON = "{}"
-        }
+        // full JSON.
+        let argumentsJSON = arguments(of: toolUse)
         await channel.send(
           .toolCalls(
             entryID: toolCallsEntryID,
@@ -112,6 +117,15 @@ enum ConverseResponseTranslator {
           )
         ))
     }
+  }
+
+  /// A tool call's arguments as JSON text.
+  ///
+  /// A non-object `input` (Bedrock should never send one for a schema-shaped
+  /// tool) collapses to `{}`, mirroring the request side's `toolInput(_:)`, so
+  /// the round-trip stays consistent.
+  static func arguments(of toolUse: ToolUseBlock) -> String {
+    if case .object = toolUse.input { toolUse.input.jsonText } else { "{}" }
   }
 
   /// The translator only forwards content; `stopReason` says whether that

@@ -15,12 +15,22 @@ private func buildRequest(
   options: GenerationOptions = GenerationOptions(toolCallingMode: nil),
   tools: [Transcript.ToolDefinition] = []
 ) -> ConverseRequest {
+  buildFullRequest(entries, options: options, tools: tools).request
+}
+
+@available(anyAppleOS 27, *)
+private func buildFullRequest(
+  _ entries: [Transcript.Entry],
+  options: GenerationOptions = GenerationOptions(toolCallingMode: nil),
+  tools: [Transcript.ToolDefinition] = [],
+  schema: GenerationSchema? = nil
+) -> BuiltConverseRequest {
   ConverseRequestBuilder.build(
     from: LanguageModelExecutorGenerationRequest(
       id: UUID(),
       transcript: Transcript(entries: entries),
       enabledTools: tools,
-      schema: nil,
+      schema: schema,
       generationOptions: options,
       contextOptions: ContextOptions(),
       metadata: [:]
@@ -312,5 +322,102 @@ struct ConverseRequestBuilderToolChoiceTests {
     // describe, so the tools stay and the choice falls back to the default.
     #expect(body.toolConfig?.tools.count == 1)
     #expect(body.toolConfig?.toolChoice == nil)
+  }
+}
+
+@Suite("ConverseRequestBuilder structured output")
+struct ConverseRequestBuilderStructuredOutputTests {
+  @available(anyAppleOS 27, *)
+  private static func prompt(
+    responseFormat: Transcript.ResponseFormat? = nil
+  ) -> [Transcript.Entry] {
+    [
+      .prompt(
+        Transcript.Prompt(segments: textSegments("what is the weather?"), responseFormat: responseFormat))
+    ]
+  }
+
+  @available(anyAppleOS 27, *)
+  private static func toolName(_ tool: ConverseTool) -> String? {
+    if case .toolSpec(let spec) = tool { spec.name } else { nil }
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("synthesizes a tool for the schema and names it in the choice")
+  func synthesizesToolForSchema() {
+    let built = buildFullRequest(Self.prompt(), schema: WeatherInput.generationSchema)
+
+    #expect(built.structuredOutputToolName == ConverseRequestBuilder.structuredOutputToolBaseName)
+    #expect(built.request.toolConfig?.tools.count == 1)
+    #expect(
+      built.request.toolConfig?.toolChoice
+        == .tool(name: ConverseRequestBuilder.structuredOutputToolBaseName))
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("asks only that some tool runs when the caller has tools of its own")
+  func leavesRoomForCallerTools() {
+    let built = buildFullRequest(
+      Self.prompt(), tools: [weatherTool()], schema: WeatherInput.generationSchema)
+
+    #expect(built.request.toolConfig?.tools.count == 2)
+    #expect(built.request.toolConfig?.toolChoice == .any)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("steps around a caller tool that already owns the name")
+  func avoidsNameCollision() {
+    let collidingTool = Transcript.ToolDefinition(
+      name: ConverseRequestBuilder.structuredOutputToolBaseName,
+      description: "A tool that got there first.",
+      parameters: WeatherInput.generationSchema
+    )
+
+    let built = buildFullRequest(
+      Self.prompt(), tools: [collidingTool], schema: WeatherInput.generationSchema)
+
+    #expect(
+      built.structuredOutputToolName == "\(ConverseRequestBuilder.structuredOutputToolBaseName)_2")
+    let names = (built.request.toolConfig?.tools ?? []).compactMap(Self.toolName)
+    #expect(Set(names).count == 2)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("reads the schema off the last prompt when the request carries none")
+  func fallsBackToPromptResponseFormat() {
+    let built = buildFullRequest(
+      Self.prompt(responseFormat: Transcript.ResponseFormat(schema: WeatherInput.generationSchema)))
+
+    #expect(built.structuredOutputToolName == ConverseRequestBuilder.structuredOutputToolBaseName)
+    #expect(built.request.toolConfig?.tools.count == 1)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("synthesizes nothing when the caller asked for no particular shape")
+  func synthesizesNothingWithoutSchema() {
+    let built = buildFullRequest(Self.prompt())
+
+    #expect(built.structuredOutputToolName == nil)
+    #expect(built.request.toolConfig == nil)
+  }
+}
+
+@Suite("ConverseResponseTranslator tool arguments")
+struct ConverseResponseTranslatorArgumentsTests {
+  @available(anyAppleOS 27, *)
+  @Test("writes an object input as sorted JSON")
+  func writesObjectInput() {
+    let block = ToolUseBlock(
+      toolUseId: "t", name: "x", input: ["b": 2, "a": 1])
+
+    #expect(ConverseResponseTranslator.arguments(of: block) == #"{"a":1,"b":2}"#)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("collapses a non-object input to an empty object")
+  func collapsesNonObjectInput() {
+    let block = ToolUseBlock(toolUseId: "t", name: "x", input: "not an object")
+
+    #expect(ConverseResponseTranslator.arguments(of: block) == "{}")
   }
 }
