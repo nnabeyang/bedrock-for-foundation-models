@@ -78,6 +78,27 @@ struct JSONSchemaTests {
       ])
   }
 
+  @Test("keeps the validation keywords that constrain generated arguments")
+  func keepsValidationKeywords() {
+    // Everything here is what `@Guide` puts in the schema: `.range(1...10)`
+    // becomes minimum/maximum, `.count(_:)` becomes minItems/maxItems, and so
+    // on. None of it may be dropped, or the constraint never reaches the model.
+    let schema: JSONValue = [
+      "type": "object",
+      "properties": [
+        "count": ["type": "integer", "minimum": 1, "maximum": 10],
+        "tags": ["type": "array", "minItems": 2, "maxItems": 3, "items": ["type": "string"]],
+        "code": ["type": "string", "pattern": "^[A-Z]{3}$", "minLength": 3, "maxLength": 3],
+        "ratio": [
+          "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "multipleOf": 0.25,
+        ],
+      ],
+      "required": ["count"],
+    ]
+
+    #expect(JSONSchema.sanitized(schema) == schema)
+  }
+
   @Test("leaves scalars untouched")
   func leavesScalarsUntouched() {
     #expect(JSONSchema.sanitized("string") == "string")
