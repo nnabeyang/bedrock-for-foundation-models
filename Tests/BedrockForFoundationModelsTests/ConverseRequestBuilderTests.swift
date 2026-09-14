@@ -111,6 +111,78 @@ struct ConverseRequestBuilderToolTests {
   }
 }
 
+@available(anyAppleOS 27, *)
+@Generable
+private struct SearchInput {
+  @Guide(description: "How many results to return.", .range(1...10))
+  var limit: Int
+
+  @Guide(description: "Tags the result must carry.", .count(2...3))
+  var tags: [String]
+
+  @Guide(description: "The first day to include, as YYYY-MM-DD.", /^\d{4}-\d{2}-\d{2}$/)
+  var since: String?
+}
+
+// `JSONSchemaTests` checks the sanitizer against hand-written JSON. These run
+// the schema `@Guide` actually generates through the builder, so a change in
+// how the framework encodes a guide shows up here rather than at Bedrock.
+@Suite("ConverseRequestBuilder tool schema")
+struct ConverseRequestBuilderToolSchemaTests {
+  @available(anyAppleOS 27, *)
+  private static func inputSchema() -> JSONValue? {
+    let tool = Transcript.ToolDefinition(
+      name: "search_items",
+      description: "Searches the items.",
+      parameters: SearchInput.generationSchema
+    )
+    let body = buildRequest(
+      [.prompt(Transcript.Prompt(segments: textSegments("find the items")))], tools: [tool])
+    guard case .toolSpec(let spec) = body.toolConfig?.tools.first,
+      case .json(let schema) = spec.inputSchema
+    else { return nil }
+    return schema
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("keeps the validation keywords @Guide generates")
+  func keepsGuideConstraints() throws {
+    let properties = try #require(Self.inputSchema()?["properties"])
+
+    #expect(properties["limit"]?["minimum"] == 1)
+    #expect(properties["limit"]?["maximum"] == 10)
+    #expect(properties["tags"]?["minItems"] == 2)
+    #expect(properties["tags"]?["maxItems"] == 3)
+    // The framework decides how the regex is spelled (it writes `-` as `\-`),
+    // so only the keyword's presence is pinned here.
+    guard case .string = properties["since"]?["pattern"] else {
+      Issue.record("expected a string pattern, got \(String(describing: properties["since"]))")
+      return
+    }
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("leaves an optional property out of required")
+  func leavesOptionalOutOfRequired() throws {
+    guard case .array(let required) = try #require(Self.inputSchema()?["required"]) else {
+      Issue.record("expected required to be an array")
+      return
+    }
+
+    #expect(Set(required) == ["limit", "tags"])
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("drops the generator's bookkeeping keys from the generated schema")
+  func dropsBookkeepingKeys() throws {
+    let schema = try #require(Self.inputSchema())
+
+    #expect(schema["title"] == nil)
+    #expect(schema["x-order"] == nil)
+    #expect(schema["additionalProperties"] == nil)
+  }
+}
+
 @Suite("ConverseRequestBuilder reasoning replay")
 struct ConverseRequestBuilderReasoningTests {
   @available(anyAppleOS 27, *)
