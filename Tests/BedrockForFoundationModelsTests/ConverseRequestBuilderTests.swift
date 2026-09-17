@@ -1,5 +1,7 @@
+import CoreGraphics
 import Foundation
 import FoundationModels
+import ImageIO
 import Testing
 
 @testable import BedrockForFoundationModels
@@ -14,8 +16,8 @@ private func buildRequest(
   _ entries: [Transcript.Entry],
   options: GenerationOptions = GenerationOptions(toolCallingMode: nil),
   tools: [Transcript.ToolDefinition] = []
-) -> ConverseRequest {
-  buildFullRequest(entries, options: options, tools: tools).request
+) throws -> ConverseRequest {
+  try buildFullRequest(entries, options: options, tools: tools).request
 }
 
 @available(anyAppleOS 27, *)
@@ -24,8 +26,8 @@ private func buildFullRequest(
   options: GenerationOptions = GenerationOptions(toolCallingMode: nil),
   tools: [Transcript.ToolDefinition] = [],
   schema: GenerationSchema? = nil
-) -> BuiltConverseRequest {
-  ConverseRequestBuilder.build(
+) throws -> BuiltConverseRequest {
+  try ConverseRequestBuilder.build(
     from: LanguageModelExecutorGenerationRequest(
       id: UUID(),
       transcript: Transcript(entries: entries),
@@ -75,7 +77,7 @@ struct ConverseRequestBuilderToolTests {
           id: "tu_1", toolName: "read_file", segments: textSegments("# eich\n\nA REPL."))),
     ]
 
-    let body = buildRequest(entries)
+    let body = try buildRequest(entries)
 
     #expect(body.messages.count == 2)
     #expect(body.messages[0].role == .assistant)
@@ -98,11 +100,11 @@ struct ConverseRequestBuilderToolTests {
 
   @available(anyAppleOS 27, *)
   @Test("substitutes (no output) for an empty tool result")
-  func emptyToolOutput() {
+  func emptyToolOutput() throws {
     let entries: [Transcript.Entry] = [
       .toolOutput(Transcript.ToolOutput(id: "tu_1", toolName: "x", segments: textSegments("")))
     ]
-    let body = buildRequest(entries)
+    let body = try buildRequest(entries)
     guard case .toolResult(let result) = body.messages.first?.content.first else {
       Issue.record("expected a toolResult block")
       return
@@ -130,13 +132,13 @@ private struct SearchInput {
 @Suite("ConverseRequestBuilder tool schema")
 struct ConverseRequestBuilderToolSchemaTests {
   @available(anyAppleOS 27, *)
-  private static func inputSchema() -> JSONValue? {
+  private static func inputSchema() throws -> JSONValue? {
     let tool = Transcript.ToolDefinition(
       name: "search_items",
       description: "Searches the items.",
       parameters: SearchInput.generationSchema
     )
-    let body = buildRequest(
+    let body = try buildRequest(
       [.prompt(Transcript.Prompt(segments: textSegments("find the items")))], tools: [tool])
     guard case .toolSpec(let spec) = body.toolConfig?.tools.first,
       case .json(let schema) = spec.inputSchema
@@ -147,7 +149,7 @@ struct ConverseRequestBuilderToolSchemaTests {
   @available(anyAppleOS 27, *)
   @Test("keeps the validation keywords @Guide generates")
   func keepsGuideConstraints() throws {
-    let properties = try #require(Self.inputSchema()?["properties"])
+    let properties = try #require(try Self.inputSchema()?["properties"])
 
     #expect(properties["limit"]?["minimum"] == 1)
     #expect(properties["limit"]?["maximum"] == 10)
@@ -164,7 +166,7 @@ struct ConverseRequestBuilderToolSchemaTests {
   @available(anyAppleOS 27, *)
   @Test("leaves an optional property out of required")
   func leavesOptionalOutOfRequired() throws {
-    guard case .array(let required) = try #require(Self.inputSchema()?["required"]) else {
+    guard case .array(let required) = try #require(try Self.inputSchema()?["required"]) else {
       Issue.record("expected required to be an array")
       return
     }
@@ -175,7 +177,7 @@ struct ConverseRequestBuilderToolSchemaTests {
   @available(anyAppleOS 27, *)
   @Test("drops the generator's bookkeeping keys from the generated schema")
   func dropsBookkeepingKeys() throws {
-    let schema = try #require(Self.inputSchema())
+    let schema = try #require(try Self.inputSchema())
 
     #expect(schema["title"] == nil)
     #expect(schema["x-order"] == nil)
@@ -187,12 +189,12 @@ struct ConverseRequestBuilderToolSchemaTests {
 struct ConverseRequestBuilderReasoningTests {
   @available(anyAppleOS 27, *)
   @Test("drops a reasoning entry that carries no signature")
-  func dropsUnsignedReasoning() {
+  func dropsUnsignedReasoning() throws {
     let entries: [Transcript.Entry] = [
       .reasoning(Transcript.Reasoning(segments: textSegments("half a thought"), signature: nil)),
       .response(Transcript.Response(assetIDs: [], segments: textSegments("answer"))),
     ]
-    let body = buildRequest(entries)
+    let body = try buildRequest(entries)
     // Only the response survives.
     #expect(body.messages.count == 1)
     #expect(body.messages[0].content == [.text("answer")])
@@ -200,12 +202,12 @@ struct ConverseRequestBuilderReasoningTests {
 
   @available(anyAppleOS 27, *)
   @Test("replays a signed reasoning entry as reasoningText with the signature")
-  func replaysSignedReasoning() {
+  func replaysSignedReasoning() throws {
     let sig = Data([1, 2, 3])
     let entries: [Transcript.Entry] = [
       .reasoning(Transcript.Reasoning(segments: textSegments("a thought"), signature: sig))
     ]
-    let body = buildRequest(entries)
+    let body = try buildRequest(entries)
     guard case .reasoningContent(.reasoningText(let reasoning)) = body.messages.first?.content.first
     else {
       Issue.record("expected a reasoningText block, got \(String(describing: body.messages.first))")
@@ -217,7 +219,7 @@ struct ConverseRequestBuilderReasoningTests {
 
   @available(anyAppleOS 27, *)
   @Test("replays a redacted-flagged reasoning entry as redactedContent")
-  func replaysRedactedReasoning() {
+  func replaysRedactedReasoning() throws {
     let sig = Data([9, 9, 9])
     let entries: [Transcript.Entry] = [
       .reasoning(
@@ -227,7 +229,7 @@ struct ConverseRequestBuilderReasoningTests {
           signature: sig
         ))
     ]
-    let body = buildRequest(entries)
+    let body = try buildRequest(entries)
     guard case .reasoningContent(.redactedContent(let data)) = body.messages.first?.content.first
     else {
       Issue.record("expected a redactedContent block, got \(String(describing: body.messages.first))")
@@ -246,8 +248,8 @@ struct ConverseRequestBuilderInferenceTests {
 
   @available(anyAppleOS 27, *)
   @Test("sends no inferenceConfig when the caller named no parameters")
-  func omitsEmptyInferenceConfig() {
-    let body = buildRequest(Self.prompt())
+  func omitsEmptyInferenceConfig() throws {
+    let body = try buildRequest(Self.prompt())
 
     #expect(body.inferenceConfig == nil)
     #expect(body.additionalModelRequestFields == nil)
@@ -255,8 +257,8 @@ struct ConverseRequestBuilderInferenceTests {
 
   @available(anyAppleOS 27, *)
   @Test("carries the response token limit")
-  func sendsMaximumResponseTokens() {
-    let body = buildRequest(
+  func sendsMaximumResponseTokens() throws {
+    let body = try buildRequest(
       Self.prompt(),
       options: GenerationOptions(
         samplingMode: nil, temperature: nil, maximumResponseTokens: 512, toolCallingMode: nil))
@@ -266,8 +268,8 @@ struct ConverseRequestBuilderInferenceTests {
 
   @available(anyAppleOS 27, *)
   @Test("expresses greedy sampling as temperature 0")
-  func sendsGreedyAsZeroTemperature() {
-    let body = buildRequest(
+  func sendsGreedyAsZeroTemperature() throws {
+    let body = try buildRequest(
       Self.prompt(),
       options: GenerationOptions(
         samplingMode: .greedy, temperature: nil, maximumResponseTokens: nil, toolCallingMode: nil))
@@ -277,8 +279,8 @@ struct ConverseRequestBuilderInferenceTests {
 
   @available(anyAppleOS 27, *)
   @Test("lets an explicit temperature override the one greedy implies")
-  func explicitTemperatureWinsOverGreedy() {
-    let body = buildRequest(
+  func explicitTemperatureWinsOverGreedy() throws {
+    let body = try buildRequest(
       Self.prompt(),
       options: GenerationOptions(
         samplingMode: .greedy, temperature: 0.7, maximumResponseTokens: nil, toolCallingMode: nil))
@@ -288,8 +290,8 @@ struct ConverseRequestBuilderInferenceTests {
 
   @available(anyAppleOS 27, *)
   @Test("maps a probability threshold onto topP")
-  func sendsProbabilityThresholdAsTopP() {
-    let body = buildRequest(
+  func sendsProbabilityThresholdAsTopP() throws {
+    let body = try buildRequest(
       Self.prompt(),
       options: GenerationOptions(
         samplingMode: .random(probabilityThreshold: 0.9),
@@ -302,8 +304,8 @@ struct ConverseRequestBuilderInferenceTests {
 
   @available(anyAppleOS 27, *)
   @Test("passes top-k through the model-specific fields, not inferenceConfig")
-  func sendsTopKThroughAdditionalFields() {
-    let body = buildRequest(
+  func sendsTopKThroughAdditionalFields() throws {
+    let body = try buildRequest(
       Self.prompt(),
       options: GenerationOptions(
         samplingMode: .random(top: 40),
@@ -346,14 +348,14 @@ struct ConverseRequestBuilderToolChoiceTests {
 
   @available(anyAppleOS 27, *)
   @Test("sends no toolConfig when there are no tools")
-  func omitsToolConfigWithoutTools() {
-    #expect(buildRequest(Self.prompt()).toolConfig == nil)
+  func omitsToolConfigWithoutTools() throws {
+    #expect(try buildRequest(Self.prompt()).toolConfig == nil)
   }
 
   @available(anyAppleOS 27, *)
   @Test("leaves the choice to the model when the caller named no mode")
-  func omitsToolChoiceWithoutMode() {
-    let body = buildRequest(Self.prompt(), options: Self.options(nil), tools: [weatherTool()])
+  func omitsToolChoiceWithoutMode() throws {
+    let body = try buildRequest(Self.prompt(), options: Self.options(nil), tools: [weatherTool()])
 
     #expect(body.toolConfig?.tools.count == 1)
     #expect(body.toolConfig?.toolChoice == nil)
@@ -361,24 +363,24 @@ struct ConverseRequestBuilderToolChoiceTests {
 
   @available(anyAppleOS 27, *)
   @Test("writes allowed as auto")
-  func sendsAllowedAsAuto() {
-    let body = buildRequest(Self.prompt(), options: Self.options(.allowed), tools: [weatherTool()])
+  func sendsAllowedAsAuto() throws {
+    let body = try buildRequest(Self.prompt(), options: Self.options(.allowed), tools: [weatherTool()])
 
     #expect(body.toolConfig?.toolChoice == .auto)
   }
 
   @available(anyAppleOS 27, *)
   @Test("writes required as any")
-  func sendsRequiredAsAny() {
-    let body = buildRequest(Self.prompt(), options: Self.options(.required), tools: [weatherTool()])
+  func sendsRequiredAsAny() throws {
+    let body = try buildRequest(Self.prompt(), options: Self.options(.required), tools: [weatherTool()])
 
     #expect(body.toolConfig?.toolChoice == .any)
   }
 
   @available(anyAppleOS 27, *)
   @Test("expresses disallowed by sending no tools at all")
-  func sendsNoToolsWhenDisallowed() {
-    let body = buildRequest(
+  func sendsNoToolsWhenDisallowed() throws {
+    let body = try buildRequest(
       Self.prompt(), options: Self.options(.disallowed), tools: [weatherTool()])
 
     #expect(body.toolConfig == nil)
@@ -386,8 +388,8 @@ struct ConverseRequestBuilderToolChoiceTests {
 
   @available(anyAppleOS 27, *)
   @Test("keeps the tools when disallowed but the history already used one")
-  func keepsToolsWhenHistoryMentionsThem() {
-    let body = buildRequest(
+  func keepsToolsWhenHistoryMentionsThem() throws {
+    let body = try buildRequest(
       Self.promptWithToolRoundTrip(), options: Self.options(.disallowed), tools: [weatherTool()])
 
     // Converse rejects a history that mentions a tool the request doesn't
@@ -416,8 +418,8 @@ struct ConverseRequestBuilderStructuredOutputTests {
 
   @available(anyAppleOS 27, *)
   @Test("synthesizes a tool for the schema and names it in the choice")
-  func synthesizesToolForSchema() {
-    let built = buildFullRequest(Self.prompt(), schema: WeatherInput.generationSchema)
+  func synthesizesToolForSchema() throws {
+    let built = try buildFullRequest(Self.prompt(), schema: WeatherInput.generationSchema)
 
     #expect(built.structuredOutputToolName == ConverseRequestBuilder.structuredOutputToolBaseName)
     #expect(built.request.toolConfig?.tools.count == 1)
@@ -428,8 +430,8 @@ struct ConverseRequestBuilderStructuredOutputTests {
 
   @available(anyAppleOS 27, *)
   @Test("asks only that some tool runs when the caller has tools of its own")
-  func leavesRoomForCallerTools() {
-    let built = buildFullRequest(
+  func leavesRoomForCallerTools() throws {
+    let built = try buildFullRequest(
       Self.prompt(), tools: [weatherTool()], schema: WeatherInput.generationSchema)
 
     #expect(built.request.toolConfig?.tools.count == 2)
@@ -438,14 +440,14 @@ struct ConverseRequestBuilderStructuredOutputTests {
 
   @available(anyAppleOS 27, *)
   @Test("steps around a caller tool that already owns the name")
-  func avoidsNameCollision() {
+  func avoidsNameCollision() throws {
     let collidingTool = Transcript.ToolDefinition(
       name: ConverseRequestBuilder.structuredOutputToolBaseName,
       description: "A tool that got there first.",
       parameters: WeatherInput.generationSchema
     )
 
-    let built = buildFullRequest(
+    let built = try buildFullRequest(
       Self.prompt(), tools: [collidingTool], schema: WeatherInput.generationSchema)
 
     #expect(
@@ -456,8 +458,8 @@ struct ConverseRequestBuilderStructuredOutputTests {
 
   @available(anyAppleOS 27, *)
   @Test("reads the schema off the last prompt when the request carries none")
-  func fallsBackToPromptResponseFormat() {
-    let built = buildFullRequest(
+  func fallsBackToPromptResponseFormat() throws {
+    let built = try buildFullRequest(
       Self.prompt(responseFormat: Transcript.ResponseFormat(schema: WeatherInput.generationSchema)))
 
     #expect(built.structuredOutputToolName == ConverseRequestBuilder.structuredOutputToolBaseName)
@@ -466,8 +468,8 @@ struct ConverseRequestBuilderStructuredOutputTests {
 
   @available(anyAppleOS 27, *)
   @Test("synthesizes nothing when the caller asked for no particular shape")
-  func synthesizesNothingWithoutSchema() {
-    let built = buildFullRequest(Self.prompt())
+  func synthesizesNothingWithoutSchema() throws {
+    let built = try buildFullRequest(Self.prompt())
 
     #expect(built.structuredOutputToolName == nil)
     #expect(built.request.toolConfig == nil)
@@ -491,5 +493,99 @@ struct ConverseResponseTranslatorArgumentsTests {
     let block = ToolUseBlock(toolUseId: "t", name: "x", input: "not an object")
 
     #expect(ConverseResponseTranslator.arguments(of: block) == "{}")
+  }
+}
+
+@available(anyAppleOS 27, *)
+private func sampleImageAttachment(
+  width: Int, height: Int, orientation: CGImagePropertyOrientation? = nil
+) throws -> Transcript.ImageAttachment {
+  let context = try #require(
+    CGContext(
+      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(),
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+  context.setFillColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1)
+  context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+  return Transcript.ImageAttachment(try #require(context.makeImage()), orientation: orientation)
+}
+
+@Suite("ConverseRequestBuilder attachments")
+struct ConverseRequestBuilderAttachmentTests {
+  @available(anyAppleOS 27, *)
+  @Test("sends an image attachment in the prompt as an image block after the text")
+  func sendsPromptImage() throws {
+    let attachment = try sampleImageAttachment(width: 8, height: 4)
+    let entries: [Transcript.Entry] = [
+      .prompt(
+        Transcript.Prompt(segments: [
+          .text(Transcript.TextSegment(content: "What is in this picture?")),
+          .attachment(Transcript.AttachmentSegment(content: .image(attachment), label: "photo")),
+        ]))
+    ]
+
+    let body = try buildRequest(entries)
+
+    #expect(body.messages.count == 1)
+    #expect(body.messages[0].role == .user)
+    #expect(body.messages[0].content.count == 2)
+    #expect(body.messages[0].content[0] == .text("What is in this picture?"))
+    guard case .image(let image) = body.messages[0].content[1] else {
+      Issue.record("expected an image block, got \(body.messages[0].content)")
+      return
+    }
+    #expect(image.format == .jpeg)
+    #expect(image.source.bytes.prefix(2) == Data([0xFF, 0xD8]))
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("puts an image in a tool result next to its text")
+  func sendsToolOutputImage() throws {
+    let attachment = try sampleImageAttachment(width: 4, height: 4)
+    let entries: [Transcript.Entry] = [
+      .toolOutput(
+        Transcript.ToolOutput(
+          id: "tu_1", toolName: "fetch_image",
+          segments: [
+            .text(Transcript.TextSegment(content: "photo.jpg")),
+            .attachment(Transcript.AttachmentSegment(content: .image(attachment))),
+          ]))
+    ]
+
+    let body = try buildRequest(entries)
+
+    guard case .toolResult(let result) = body.messages.first?.content.first else {
+      Issue.record("expected a toolResult block")
+      return
+    }
+    #expect(result.content.count == 2)
+    #expect(result.content[0] == .text("photo.jpg"))
+    guard case .image(let image) = result.content[1] else {
+      Issue.record("expected an image block in the tool result")
+      return
+    }
+    #expect(image.format == .jpeg)
+  }
+
+  @available(anyAppleOS 27, *)
+  @Test("sends only the image when a tool result has no text")
+  func sendsImageOnlyToolOutput() throws {
+    let attachment = try sampleImageAttachment(width: 4, height: 4)
+    let entries: [Transcript.Entry] = [
+      .toolOutput(
+        Transcript.ToolOutput(
+          id: "tu_1", toolName: "fetch_image",
+          segments: [.attachment(Transcript.AttachmentSegment(content: .image(attachment)))]))
+    ]
+
+    let body = try buildRequest(entries)
+
+    guard case .toolResult(let result) = body.messages.first?.content.first,
+      case .image? = result.content.first
+    else {
+      Issue.record("expected a toolResult with an image block")
+      return
+    }
+    #expect(result.content.count == 1)
   }
 }

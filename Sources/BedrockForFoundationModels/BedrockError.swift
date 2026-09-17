@@ -8,6 +8,9 @@ enum BedrockError: Error, LocalizedError {
   case invalidURL(String)
   case httpError(Int, String)
   case invalidResponse(String)
+  case unsupportedAttachment
+  case unencodableImage
+  case imageTooLarge(Int)
 
   var errorDescription: String? {
     switch self {
@@ -17,6 +20,11 @@ enum BedrockError: Error, LocalizedError {
     case .invalidURL(let url): return "Invalid Bedrock URL: \(url)"
     case .httpError(let code, let body): return "Bedrock HTTP error \(code): \(body)"
     case .invalidResponse(let msg): return "Bedrock invalid response: \(msg)"
+    case .unsupportedAttachment:
+      return "Bedrock cannot send this kind of attachment; only images are supported."
+    case .unencodableImage: return "The image attachment could not be encoded as JPEG."
+    case .imageTooLarge(let byteCount):
+      return "The image attachment is too large for Bedrock (\(byteCount) bytes after compression)."
     }
   }
 }

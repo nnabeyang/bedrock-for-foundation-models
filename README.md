@@ -9,12 +9,13 @@ It provides `BedrockLanguageModel`, a `LanguageModel` implementation backed by t
 - Uses the Bedrock Converse API (`POST /model/{modelId}/converse`)
 - Supports both **Bedrock API keys** (bearer token) and **AWS SigV4** credentials, including temporary session tokens
 - Supports tool calling
+- Supports image attachments (`Attachment<ImageAttachmentContent>` in a prompt, or an image a tool returns): the image is scaled to at most 1568 px on its longest side and sent as JPEG under Converse's 3.75 MB limit. `vision` is declared for every model; one that cannot read images answers 400 from Bedrock
 - Supports reasoning content, carrying the signature over to the next turn
 - Retries `503` responses with exponential backoff (up to 3 retries)
 - The Converse request and response are modeled as `Codable` Swift types, so
   content blocks Bedrock adds later round-trip untouched rather than failing the
   response
-- No external dependencies — only `Foundation` and `CommonCrypto`
+- No external dependencies — only `Foundation`, `CommonCrypto` and `CoreImage`
 
 ## Requirements
 

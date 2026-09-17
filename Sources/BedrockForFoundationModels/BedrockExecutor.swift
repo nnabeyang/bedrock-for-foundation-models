@@ -45,7 +45,7 @@ public struct BedrockExecutor: LanguageModelExecutor {
     model: BedrockLanguageModel,
     streamingInto channel: LanguageModelExecutorGenerationChannel
   ) async throws {
-    let built = ConverseRequestBuilder.build(from: request)
+    let built = try ConverseRequestBuilder.build(from: request)
     do {
       let response = try await client.converse(
         modelId: configuration.modelId, request: built.request)

@@ -27,7 +27,7 @@ enum ConverseRequestBuilder {
   /// claims it.
   static let structuredOutputToolBaseName = "respond_with_structured_output"
 
-  static func build(from request: LanguageModelExecutorGenerationRequest) -> BuiltConverseRequest {
+  static func build(from request: LanguageModelExecutorGenerationRequest) throws -> BuiltConverseRequest {
     var systemParts: [String] = []
     var messages: [ConverseMessage] = []
 
@@ -38,11 +38,11 @@ enum ConverseRequestBuilder {
         if !text.isEmpty { systemParts.append(text) }
 
       case .prompt(let prompt):
-        let content = contentBlocks(from: prompt.segments)
+        let content = try contentBlocks(from: prompt.segments)
         if !content.isEmpty { messages.append(.init(role: .user, content: content)) }
 
       case .response(let response):
-        let content = contentBlocks(from: response.segments)
+        let content = try contentBlocks(from: response.segments)
         if !content.isEmpty { messages.append(.init(role: .assistant, content: content)) }
 
       case .toolCalls(let calls):
@@ -54,16 +54,12 @@ enum ConverseRequestBuilder {
         if !content.isEmpty { messages.append(.init(role: .assistant, content: content)) }
 
       case .toolOutput(let output):
-        let text = text(of: output.segments)
         messages.append(
           .init(
             role: .user,
             content: [
               .toolResult(
-                .init(
-                  toolUseId: output.id,
-                  content: [.text(text.isEmpty ? "(no output)" : text)]
-                )
+                .init(toolUseId: output.id, content: try toolResultContent(from: output.segments))
               )
             ]
           )
@@ -276,13 +272,40 @@ enum ConverseRequestBuilder {
 
   private static func contentBlocks(
     from segments: [Transcript.Segment]
-  ) -> [ConverseContentBlock] {
-    segments.compactMap { segment -> ConverseContentBlock? in
+  ) throws -> [ConverseContentBlock] {
+    var blocks: [ConverseContentBlock] = []
+    for segment in segments {
       switch segment {
-      case .text(let text) where !text.content.isEmpty: .text(text.content)
-      case .structure(let structure): .text(structure.content.jsonString)
-      default: nil
+      case .text(let text) where !text.content.isEmpty: blocks.append(.text(text.content))
+      case .text: break
+      case .structure(let structure): blocks.append(.text(structure.content.jsonString))
+      case .attachment(let attachment): blocks.append(.image(try imageBlock(of: attachment)))
+      @unknown default: break
       }
+    }
+    return blocks
+  }
+
+  /// A tool result carries its text as one block and each image as its own.
+  /// Converse rejects an empty `content`, hence the placeholder.
+  private static func toolResultContent(
+    from segments: [Transcript.Segment]
+  ) throws -> [ToolResultContentBlock] {
+    var blocks: [ToolResultContentBlock] = []
+    let text = text(of: segments)
+    if !text.isEmpty { blocks.append(.text(text)) }
+    for segment in segments {
+      if case .attachment(let attachment) = segment {
+        blocks.append(.image(try imageBlock(of: attachment)))
+      }
+    }
+    return blocks.isEmpty ? [.text("(no output)")] : blocks
+  }
+
+  private static func imageBlock(of segment: Transcript.AttachmentSegment) throws -> ImageBlock {
+    switch segment.content {
+    case .image(let image): return try ImageAttachmentEncoder.encode(image)
+    @unknown default: throw BedrockError.unsupportedAttachment
     }
   }
 
