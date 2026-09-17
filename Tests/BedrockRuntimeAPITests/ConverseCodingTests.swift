@@ -82,10 +82,35 @@ struct ConverseContentBlockCodingTests {
     #expect(try json(block) == payload)
   }
 
-  @Test("keeps an image block verbatim rather than failing")
-  func keepsImageBlockVerbatim() throws {
+  @Test("round-trips an image block, carrying the bytes as base64")
+  func roundTripsImage() throws {
     let payload = #"{"image":{"format":"png","source":{"bytes":"AQID"}}}"#
     let block = try JSONDecoder().decode(ConverseContentBlock.self, from: Data(payload.utf8))
+    guard case .image(let image) = block else {
+      Issue.record("expected .image")
+      return
+    }
+    #expect(image.format == .png)
+    #expect(Array(image.source.bytes) == [1, 2, 3])
+    #expect(try json(block) == payload)
+  }
+
+  @Test("encodes an image block built from bytes")
+  func encodesImage() throws {
+    let block = ConverseContentBlock.image(ImageBlock(format: .jpeg, bytes: Data([0xFF, 0xD8])))
+    #expect(try json(block) == #"{"image":{"format":"jpeg","source":{"bytes":"/9g="}}}"#)
+  }
+
+  @Test("round-trips an image inside a tool result")
+  func roundTripsToolResultImage() throws {
+    let payload =
+      #"{"toolResult":{"content":[{"text":"here"},{"image":{"format":"jpeg","source":{"bytes":"AQID"}}}],"toolUseId":"tu_1"}}"#
+    let block = try JSONDecoder().decode(ConverseContentBlock.self, from: Data(payload.utf8))
+    guard case .toolResult(let result) = block else {
+      Issue.record("expected .toolResult")
+      return
+    }
+    #expect(result.content == [.text("here"), .image(ImageBlock(format: .jpeg, bytes: Data([1, 2, 3])))])
     #expect(try json(block) == payload)
   }
 }

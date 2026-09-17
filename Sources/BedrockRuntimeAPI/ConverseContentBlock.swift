@@ -6,18 +6,19 @@ import Foundation
 /// exactly one member key naming the variant (`{"text": …}`,
 /// `{"toolUse": {…}}`). Decoding therefore probes the known keys in turn and
 /// keeps anything else as ``other``, so a block type this package doesn't model
-/// — `image`, `document`, `cachePoint`, `citationsContent` and whatever Bedrock
-/// adds next — round-trips untouched instead of failing the response or losing
-/// its payload on the way back.
+/// — `document`, `cachePoint`, `citationsContent` and whatever Bedrock adds
+/// next — round-trips untouched instead of failing the response or losing its
+/// payload on the way back.
 public enum ConverseContentBlock: Sendable, Hashable, Codable {
   case text(String)
+  case image(ImageBlock)
   case toolUse(ToolUseBlock)
   case toolResult(ToolResultBlock)
   case reasoningContent(ReasoningContentBlock)
   case other(JSONValue)
 
   private enum CodingKeys: String, CodingKey {
-    case text, toolUse, toolResult, reasoningContent
+    case text, image, toolUse, toolResult, reasoningContent
   }
 
   public init(from decoder: Decoder) throws {
@@ -27,6 +28,8 @@ public enum ConverseContentBlock: Sendable, Hashable, Codable {
     }
     if let text = try c.decodeIfPresent(String.self, forKey: .text) {
       self = .text(text)
+    } else if let block = try c.decodeIfPresent(ImageBlock.self, forKey: .image) {
+      self = .image(block)
     } else if let block = try c.decodeIfPresent(ToolUseBlock.self, forKey: .toolUse) {
       self = .toolUse(block)
     } else if let block = try c.decodeIfPresent(ToolResultBlock.self, forKey: .toolResult) {
@@ -48,11 +51,43 @@ public enum ConverseContentBlock: Sendable, Hashable, Codable {
     var c = encoder.container(keyedBy: CodingKeys.self)
     switch self {
     case .text(let text): try c.encode(text, forKey: .text)
+    case .image(let block): try c.encode(block, forKey: .image)
     case .toolUse(let block): try c.encode(block, forKey: .toolUse)
     case .toolResult(let block): try c.encode(block, forKey: .toolResult)
     case .reasoningContent(let block): try c.encode(block, forKey: .reasoningContent)
     case .other: break  // written above, without the keyed container
     }
+  }
+}
+
+// MARK: - Image
+
+/// An image the model looks at. The bytes travel inline, base64 on the wire,
+/// which is how `JSONEncoder` writes `Data` by default.
+///
+/// Converse takes at most 3.75 MB per image, 8000 pixels a side and 20 images
+/// a request; the service answers 400 past those, so a caller that builds
+/// blocks by hand has to size the image first. The FoundationModels bridge
+/// does that in `ImageAttachmentEncoder`.
+public struct ImageBlock: Sendable, Hashable, Codable {
+  public enum Format: String, Sendable, Hashable, Codable {
+    case png, jpeg, gif, webp
+  }
+
+  public struct Source: Sendable, Hashable, Codable {
+    public var bytes: Data
+
+    public init(bytes: Data) {
+      self.bytes = bytes
+    }
+  }
+
+  public var format: Format
+  public var source: Source
+
+  public init(format: Format, bytes: Data) {
+    self.format = format
+    self.source = Source(bytes: bytes)
   }
 }
 
@@ -90,15 +125,16 @@ public struct ToolResultBlock: Sendable, Hashable, Codable {
   }
 }
 
-/// One block of a tool result. Bedrock also accepts `image`, `document`,
-/// `video` and `searchResult` here; those decode as ``other``.
+/// One block of a tool result. Bedrock also accepts `document`, `video` and
+/// `searchResult` here; those decode as ``other``.
 public enum ToolResultContentBlock: Sendable, Hashable, Codable {
   case text(String)
   case json(JSONValue)
+  case image(ImageBlock)
   case other(JSONValue)
 
   private enum CodingKeys: String, CodingKey {
-    case text, json
+    case text, json, image
   }
 
   public init(from decoder: Decoder) throws {
@@ -110,6 +146,8 @@ public enum ToolResultContentBlock: Sendable, Hashable, Codable {
       self = .text(text)
     } else if let json = try c.decodeIfPresent(JSONValue.self, forKey: .json) {
       self = .json(json)
+    } else if let block = try c.decodeIfPresent(ImageBlock.self, forKey: .image) {
+      self = .image(block)
     } else {
       self = .other(try JSONValue(from: decoder))
     }
@@ -124,6 +162,7 @@ public enum ToolResultContentBlock: Sendable, Hashable, Codable {
     switch self {
     case .text(let text): try c.encode(text, forKey: .text)
     case .json(let json): try c.encode(json, forKey: .json)
+    case .image(let block): try c.encode(block, forKey: .image)
     case .other: break
     }
   }

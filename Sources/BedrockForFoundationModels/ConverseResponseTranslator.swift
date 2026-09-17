@@ -99,7 +99,7 @@ enum ConverseResponseTranslator {
             action: .updateSignature(data, tokenCount: 0)
           ))
 
-      case .text, .toolResult, .reasoningContent, .other:
+      case .text, .image, .toolResult, .reasoningContent, .other:
         break
       }
     }
@@ -150,7 +150,7 @@ enum ConverseResponseTranslator {
         switch block {
         case .text(let text): !text.isEmpty
         case .toolUse, .reasoningContent: true
-        case .toolResult, .other: false
+        case .image, .toolResult, .other: false
         }
       }
       if !hasUsableContent {

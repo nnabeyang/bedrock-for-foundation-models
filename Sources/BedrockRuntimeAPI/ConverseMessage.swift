@@ -36,7 +36,7 @@ extension [ConverseMessage] {
       message.content.contains { block in
         switch block {
         case .toolUse, .toolResult: true
-        case .text, .reasoningContent, .other: false
+        case .text, .image, .reasoningContent, .other: false
         }
       }
     }
